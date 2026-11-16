@@ -9,12 +9,12 @@ import (
 
 func scanTrip(row pgx.Row) (tripdomain.Trip, error) {
 	var trip tripdomain.Trip
-	var finishedAt pgtype.Timestamptz
+	var finishedAt, lastPositionAt pgtype.Timestamptz
 	err := row.Scan(
 		&trip.ID, &trip.UserID, &trip.DriverID,
 		&trip.StartPoint.Latitude, &trip.StartPoint.Longitude,
 		&trip.EndPoint.Latitude, &trip.EndPoint.Longitude,
-		&trip.Price, &trip.Status, &trip.StartedAt, &finishedAt,
+		&trip.Price, &trip.Status, &trip.StartedAt, &finishedAt, &lastPositionAt,
 	)
 	if err != nil {
 		return tripdomain.Trip{}, err
@@ -22,6 +22,10 @@ func scanTrip(row pgx.Row) (tripdomain.Trip, error) {
 	if finishedAt.Valid {
 		finished := finishedAt.Time
 		trip.FinishedAt = &finished
+	}
+	if lastPositionAt.Valid {
+		lastPosition := lastPositionAt.Time
+		trip.LastPositionAt = &lastPosition
 	}
 	return trip, nil
 }

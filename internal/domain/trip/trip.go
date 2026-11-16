@@ -27,6 +27,8 @@ type Trip struct {
 	Status     string
 	StartedAt  time.Time
 	FinishedAt *time.Time
+
+	LastPositionAt *time.Time
 }
 
 func NewTrip(
