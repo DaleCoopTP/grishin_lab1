@@ -103,6 +103,12 @@ curl -i localhost:8080/ready
 | `DATABASE_MAX_CONN_LIFETIME` | срок жизни соединения | `30m` |
 | `DATABASE_CONNECT_TIMEOUT` | подключение и стартовый `Ping` | `5s` |
 | `DATABASE_QUERY_TIMEOUT` | запросы и транзакции | `3s` |
+| `POSITION_CHECK_INTERVAL` | период сканера устаревших поездок и пауза между повторными пушами | `30s` |
+| `POSITION_STALE_AFTER` | через сколько без координат поездка считается устаревшей | `60s` |
+| `POSITION_WORKERS` | число воркеров опроса | `4` |
+| `POSITION_QUEUE_SIZE` | ёмкость очереди опроса | `100` |
+| `PUSH_HTTP_URL` | адрес Push Service | из `.env` |
+| `PUSH_REQUEST_TIMEOUT` | таймаут одного запроса в Push Service | `1s` |
 | `OTEL_SERVICE_NAME` | имя сервиса в телеметрии | `trip-service` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | адрес коллектора | из `.env` |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | протокол экспорта | `http/protobuf` или `grpc` |

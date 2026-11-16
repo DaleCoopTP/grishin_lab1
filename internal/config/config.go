@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -23,6 +24,12 @@ type Config struct {
 	DatabaseMaxConnLifetime time.Duration
 	DatabaseConnectTimeout  time.Duration
 	DatabaseQueryTimeout    time.Duration
+	PositionCheckInterval   time.Duration
+	PositionStaleAfter      time.Duration
+	PositionWorkers         int
+	PositionQueueSize       int
+	PushHTTPURL             string
+	PushRequestTimeout      time.Duration
 }
 
 func Load() (Config, error) {
@@ -41,6 +48,12 @@ func Load() (Config, error) {
 		DatabaseMaxConnLifetime: r.duration("DATABASE_MAX_CONN_LIFETIME"),
 		DatabaseConnectTimeout:  r.duration("DATABASE_CONNECT_TIMEOUT"),
 		DatabaseQueryTimeout:    r.duration("DATABASE_QUERY_TIMEOUT"),
+		PositionCheckInterval:   r.duration("POSITION_CHECK_INTERVAL"),
+		PositionStaleAfter:      r.duration("POSITION_STALE_AFTER"),
+		PositionWorkers:         r.positiveInt("POSITION_WORKERS"),
+		PositionQueueSize:       r.positiveInt("POSITION_QUEUE_SIZE"),
+		PushHTTPURL:             r.httpURL("PUSH_HTTP_URL"),
+		PushRequestTimeout:      r.duration("PUSH_REQUEST_TIMEOUT"),
 	}
 	if r.err != nil {
 		return Config{}, r.err
@@ -112,4 +125,36 @@ func (r *envReader) int32Value(name string, allowZero bool) int32 {
 		}
 	}
 	return int32(parsed)
+}
+
+func (r *envReader) positiveInt(name string) int {
+	value := r.required(name)
+	if r.err != nil {
+		return 0
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		r.err = fmt.Errorf("%s: %w", name, err)
+		return 0
+	}
+	if parsed <= 0 {
+		r.err = fmt.Errorf("%s must be positive", name)
+	}
+	return parsed
+}
+
+func (r *envReader) httpURL(name string) string {
+	value := r.required(name)
+	if r.err != nil {
+		return ""
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		r.err = fmt.Errorf("%s: %w", name, err)
+		return ""
+	}
+	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		r.err = fmt.Errorf("%s must be an absolute http or https URL", name)
+	}
+	return strings.TrimRight(value, "/")
 }
