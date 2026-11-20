@@ -28,6 +28,7 @@ type Config struct {
 	PositionStaleAfter      time.Duration
 	PositionWorkers         int
 	PositionQueueSize       int
+	PositionScanBatchSize   int
 	PushHTTPURL             string
 	PushRequestTimeout      time.Duration
 }
@@ -52,6 +53,7 @@ func Load() (Config, error) {
 		PositionStaleAfter:      r.duration("POSITION_STALE_AFTER"),
 		PositionWorkers:         r.positiveInt("POSITION_WORKERS"),
 		PositionQueueSize:       r.positiveInt("POSITION_QUEUE_SIZE"),
+		PositionScanBatchSize:   r.positiveInt("POSITION_SCAN_BATCH_SIZE"),
 		PushHTTPURL:             r.httpURL("PUSH_HTTP_URL"),
 		PushRequestTimeout:      r.duration("PUSH_REQUEST_TIMEOUT"),
 	}

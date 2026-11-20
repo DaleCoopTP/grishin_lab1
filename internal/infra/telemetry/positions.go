@@ -44,6 +44,7 @@ type positionPool interface {
 type PositionRequests struct {
 	meter       metric.Meter
 	staleChecks metric.Int64Counter
+	scanRows    metric.Int64Histogram
 	requests    metric.Int64Counter
 	duration    metric.Float64Histogram
 }
@@ -52,6 +53,14 @@ func NewPositionRequests(meter metric.Meter) (*PositionRequests, error) {
 	staleChecks, err := meter.Int64Counter("tripgo.stale_checks", metric.WithUnit("{trip}"))
 	if err != nil {
 		return nil, fmt.Errorf("create stale checks counter: %w", err)
+	}
+	scanRows, err := meter.Int64Histogram("tripgo.stale_checks.rows",
+		metric.WithUnit("{row}"),
+		metric.WithDescription("stale trip rows read by one scanner tick"),
+		metric.WithExplicitBucketBoundaries(0, 10, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 50000),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create stale check rows histogram: %w", err)
 	}
 	requests, err := meter.Int64Counter("tripgo.position_requests", metric.WithUnit("{request}"))
 	if err != nil {
@@ -64,7 +73,7 @@ func NewPositionRequests(meter metric.Meter) (*PositionRequests, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create position request duration histogram: %w", err)
 	}
-	return &PositionRequests{meter: meter, staleChecks: staleChecks, requests: requests, duration: duration}, nil
+	return &PositionRequests{meter: meter, staleChecks: staleChecks, scanRows: scanRows, requests: requests, duration: duration}, nil
 }
 
 // ObservePool exports the queue length and the number of busy workers.
@@ -89,6 +98,10 @@ func (p *PositionRequests) ObservePool(pool positionPool) error {
 
 func (p *PositionRequests) StaleCheck(ctx context.Context, result string) {
 	p.staleChecks.Add(ctx, 1, metric.WithAttributes(attribute.String(resultKey, result)))
+}
+
+func (p *PositionRequests) ScanFinished(ctx context.Context, rows int) {
+	p.scanRows.Record(ctx, int64(rows))
 }
 
 func (p *PositionRequests) RequestDropped(ctx context.Context) {

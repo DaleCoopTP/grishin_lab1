@@ -12,7 +12,7 @@ import (
 )
 
 type staleReader interface {
-	ListStale(ctx context.Context, staleAfter time.Duration) ([]trip.StaleTrip, error)
+	ListStale(ctx context.Context, staleAfter time.Duration, after *trip.StaleTrip, limit int) ([]trip.StaleTrip, error)
 }
 
 type pusher interface {
@@ -21,6 +21,7 @@ type pusher interface {
 
 type metrics interface {
 	StaleCheck(ctx context.Context, result string)
+	ScanFinished(ctx context.Context, rows int)
 	RequestDropped(ctx context.Context)
 	RequestFinished(ctx context.Context, result string, duration time.Duration)
 }

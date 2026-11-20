@@ -64,6 +64,8 @@ func TestPositionRequestsMetrics(t *testing.T) {
 		requests.StaleCheck(ctx, result)
 	}
 	requests.RequestDropped(ctx)
+	requests.ScanFinished(ctx, 250)
+	requests.ScanFinished(ctx, 0)
 	requests.RequestFinished(ctx, "success", 150*time.Millisecond)
 	requests.RequestFinished(ctx, "error", time.Second)
 
@@ -83,6 +85,10 @@ func TestPositionRequestsMetrics(t *testing.T) {
 		if want := map[string]float64{"success": 0.15, "error": 1}[result.AsString()]; point.Count != 1 || point.Sum != want {
 			t.Fatalf("duration for %s: %+v", result.AsString(), point)
 		}
+	}
+	rows, ok := metrics["tripgo.stale_checks.rows"].(metricdata.Histogram[int64])
+	if !ok || len(rows.DataPoints) != 1 || rows.DataPoints[0].Count != 2 || rows.DataPoints[0].Sum != 250 {
+		t.Fatalf("rows read per tick: %+v", metrics["tripgo.stale_checks.rows"])
 	}
 	for name, want := range map[string]int64{"tripgo.position_requests.queue.size": 7, "tripgo.position_requests.workers.active": 3} {
 		gauge, ok := metrics[name].(metricdata.Gauge[int64])

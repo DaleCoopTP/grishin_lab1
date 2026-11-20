@@ -13,6 +13,7 @@ const (
 	envStaleAfter    = "POSITION_STALE_AFTER"
 	envWorkers       = "POSITION_WORKERS"
 	envQueueSize     = "POSITION_QUEUE_SIZE"
+	envBatchSize     = "POSITION_SCAN_BATCH_SIZE"
 	envPushURL       = "PUSH_HTTP_URL"
 	envPushTimeout   = "PUSH_REQUEST_TIMEOUT"
 )
@@ -36,6 +37,7 @@ func validEnv() map[string]string {
 		envStaleAfter:                "60s",
 		envWorkers:                   "4",
 		envQueueSize:                 "100",
+		envBatchSize:                 "100",
 		envPushURL:                   "http://localhost:8090/",
 		envPushTimeout:               "1s",
 	}
@@ -58,7 +60,7 @@ func TestLoadReadsPositionSettings(t *testing.T) {
 	if cfg.PositionCheckInterval != 30*time.Second || cfg.PositionStaleAfter != time.Minute {
 		t.Fatalf("intervals: got %s and %s", cfg.PositionCheckInterval, cfg.PositionStaleAfter)
 	}
-	if cfg.PositionWorkers != 4 || cfg.PositionQueueSize != 100 {
+	if cfg.PositionWorkers != 4 || cfg.PositionQueueSize != 100 || cfg.PositionScanBatchSize != 100 {
 		t.Fatalf("pool: got %d workers and queue %d", cfg.PositionWorkers, cfg.PositionQueueSize)
 	}
 	if cfg.PushHTTPURL != "http://localhost:8090" || cfg.PushRequestTimeout != time.Second {
@@ -80,6 +82,7 @@ func TestLoadRejectsInvalidPositionSettings(t *testing.T) {
 		{name: "zero workers", env: envWorkers, value: "0", want: "POSITION_WORKERS must be positive"},
 		{name: "fractional workers", env: envWorkers, value: "1.5", want: "POSITION_WORKERS"},
 		{name: "negative queue", env: envQueueSize, value: "-1", want: "POSITION_QUEUE_SIZE must be positive"},
+		{name: "zero batch", env: envBatchSize, value: "0", want: "POSITION_SCAN_BATCH_SIZE must be positive"},
 		{name: "missing push url", env: envPushURL, value: "", want: "PUSH_HTTP_URL is required"},
 		{name: "push url without scheme", env: envPushURL, value: "localhost:8090", want: "PUSH_HTTP_URL must be an absolute http or https URL"},
 		{name: "push url without host", env: envPushURL, value: "http://", want: "PUSH_HTTP_URL must be an absolute http or https URL"},

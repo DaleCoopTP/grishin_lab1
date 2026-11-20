@@ -44,18 +44,18 @@ func (m *MockstaleReader) EXPECT() *MockstaleReaderMockRecorder {
 }
 
 // ListStale mocks base method.
-func (m *MockstaleReader) ListStale(ctx context.Context, staleAfter time.Duration) ([]trip.StaleTrip, error) {
+func (m *MockstaleReader) ListStale(ctx context.Context, staleAfter time.Duration, after *trip.StaleTrip, limit int) ([]trip.StaleTrip, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListStale", ctx, staleAfter)
+	ret := m.ctrl.Call(m, "ListStale", ctx, staleAfter, after, limit)
 	ret0, _ := ret[0].([]trip.StaleTrip)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListStale indicates an expected call of ListStale.
-func (mr *MockstaleReaderMockRecorder) ListStale(ctx, staleAfter any) *gomock.Call {
+func (mr *MockstaleReaderMockRecorder) ListStale(ctx, staleAfter, after, limit any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListStale", reflect.TypeOf((*MockstaleReader)(nil).ListStale), ctx, staleAfter)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListStale", reflect.TypeOf((*MockstaleReader)(nil).ListStale), ctx, staleAfter, after, limit)
 }
 
 // Mockpusher is a mock of pusher interface.
@@ -142,6 +142,18 @@ func (m *Mockmetrics) RequestFinished(ctx context.Context, result string, durati
 func (mr *MockmetricsMockRecorder) RequestFinished(ctx, result, duration any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RequestFinished", reflect.TypeOf((*Mockmetrics)(nil).RequestFinished), ctx, result, duration)
+}
+
+// ScanFinished mocks base method.
+func (m *Mockmetrics) ScanFinished(ctx context.Context, rows int) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "ScanFinished", ctx, rows)
+}
+
+// ScanFinished indicates an expected call of ScanFinished.
+func (mr *MockmetricsMockRecorder) ScanFinished(ctx, rows any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ScanFinished", reflect.TypeOf((*Mockmetrics)(nil).ScanFinished), ctx, rows)
 }
 
 // StaleCheck mocks base method.

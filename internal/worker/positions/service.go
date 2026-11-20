@@ -14,6 +14,8 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
+
+	"github.com/DaleCoopTP/grishin_lab1/internal/domain/trip"
 )
 
 const (
@@ -27,6 +29,7 @@ type Config struct {
 	StaleAfter     time.Duration
 	Workers        int
 	QueueSize      int
+	ScanBatchSize  int
 	RequestTimeout time.Duration
 }
 
@@ -154,39 +157,67 @@ func (s *Service) scan(ctx context.Context) {
 	}
 }
 
+// scanOnce reads stale trips in batches, the longest silent first. It stops
+// after the batch in which the queue overflowed: later rows are fresher and
+// would be dropped anyway, so the next tick starts from the beginning.
 func (s *Service) scanOnce(ctx context.Context) {
 	ctx, span := s.tracer.Start(ctx, scanSpanName)
 	defer span.End()
-	trips, err := s.reader.ListStale(ctx, s.cfg.StaleAfter)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "stale trips scan failed")
-		if ctx.Err() == nil {
-			s.logger.ErrorContext(ctx, "stale trips scan failed", "error", err.Error())
-		}
-		return
-	}
 	counts := map[string]int{}
-	for _, trip := range trips {
-		result := s.queue.offer(task{tripID: trip.ID, driverID: trip.DriverID, scan: span.SpanContext()})
-		counts[result]++
-		s.metrics.StaleCheck(ctx, result)
-		if result == ResultDropped {
-			s.metrics.RequestDropped(ctx)
+	rows, batches, evicted := 0, 0, 0
+	defer func() {
+		s.metrics.ScanFinished(ctx, rows)
+		span.SetAttributes(
+			attribute.Int("tripgo.stale_trips.rows", rows),
+			attribute.Int("tripgo.stale_trips.batches", batches),
+			attribute.Int("tripgo.stale_checks.queued", counts[ResultQueued]),
+			attribute.Int("tripgo.stale_checks.duplicate", counts[ResultDuplicate]),
+			attribute.Int("tripgo.stale_checks.dropped", counts[ResultDropped]),
+			attribute.Int("tripgo.stale_checks.evicted", evicted),
+		)
+		if counts[ResultDropped]+evicted > 0 {
+			s.logger.WarnContext(ctx, "position request queue is full, trips skipped until the next tick",
+				"dropped", counts[ResultDropped], "evicted", evicted, "queue_size", s.cfg.QueueSize)
 		}
-	}
-	span.SetAttributes(
-		attribute.Int("tripgo.stale_trips", len(trips)),
-		attribute.Int("tripgo.stale_checks.queued", counts[ResultQueued]),
-		attribute.Int("tripgo.stale_checks.duplicate", counts[ResultDuplicate]),
-		attribute.Int("tripgo.stale_checks.dropped", counts[ResultDropped]),
-	)
-	if dropped := counts[ResultDropped]; dropped > 0 {
-		s.logger.WarnContext(ctx, "position request queue is full, trips skipped until the next tick",
-			"dropped", dropped, "queue_size", s.cfg.QueueSize)
+	}()
+
+	var after *trip.StaleTrip
+	for {
+		batch, err := s.reader.ListStale(ctx, s.cfg.StaleAfter, after, s.cfg.ScanBatchSize)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "stale trips scan failed")
+			if ctx.Err() == nil {
+				s.logger.ErrorContext(ctx, "stale trips scan failed", "error", err.Error(), "batch", batches+1)
+			}
+			return
+		}
+		batches++
+		rows += len(batch)
+		overflow := false
+		for _, stale := range batch {
+			offered := s.queue.offer(task{
+				tripID: stale.ID, driverID: stale.DriverID, lastSeenAt: stale.LastSeenAt, scan: span.SpanContext(),
+			})
+			counts[offered.result]++
+			s.metrics.StaleCheck(ctx, offered.result)
+			if offered.result == ResultDropped || offered.evicted {
+				overflow = true
+				s.metrics.RequestDropped(ctx)
+			}
+			if offered.evicted {
+				evicted++
+			}
+		}
+		if overflow || len(batch) < s.cfg.ScanBatchSize {
+			return
+		}
+		after = &batch[len(batch)-1]
 	}
 }
 
+// work leaves the queue untouched once ctx is cancelled, so Stop can report
+// exactly how many tasks were abandoned.
 func (s *Service) work(ctx context.Context) {
 	for ctx.Err() == nil {
 		t, ok := s.queue.take(ctx)

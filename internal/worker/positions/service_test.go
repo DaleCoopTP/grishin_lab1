@@ -324,7 +324,7 @@ func TestRealTickerTriggersScan(t *testing.T) {
 			return nil
 		})
 	reader := NewMockstaleReader(ctrl)
-	reader.EXPECT().ListStale(gomock.Any(), staleAfter).Return([]trip.StaleTrip{polled}, nil).MinTimes(1)
+	reader.EXPECT().ListStale(gomock.Any(), staleAfter, nil, batchSize).Return([]trip.StaleTrip{polled}, nil).MinTimes(1)
 	m, _ := recordingMetrics(ctrl)
 	cfg := config(1, 10)
 	cfg.CheckInterval = time.Millisecond

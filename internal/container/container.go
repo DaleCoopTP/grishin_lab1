@@ -104,6 +104,7 @@ func New(ctx context.Context, cfg config.Config) (_ *Container, err error) {
 		StaleAfter:     cfg.PositionStaleAfter,
 		Workers:        cfg.PositionWorkers,
 		QueueSize:      cfg.PositionQueueSize,
+		ScanBatchSize:  cfg.PositionScanBatchSize,
 		RequestTimeout: cfg.PushRequestTimeout,
 	}, repository, pushClient, positionRequests, logger, positions.WithTracer(sdk.Traces.Tracer("trip-service/positions")))
 	if err := positionRequests.ObservePool(poller); err != nil {

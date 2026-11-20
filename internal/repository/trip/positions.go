@@ -85,12 +85,21 @@ func (r *Repository) ListPositions(ctx context.Context, tripID uuid.UUID) ([]tri
 	return positions, nil
 }
 
-func (r *Repository) ListStale(ctx context.Context, staleAfter time.Duration) ([]tripdomain.StaleTrip, error) {
-	query, args, err := squirrel.Select("id", "driver_id", lastSeenExpr+" AS last_seen_at").
+// ListStale returns up to limit active trips silent for longer than staleAfter,
+// the longest silent first. Pass the last trip of the previous batch as after
+// to continue: the next batch starts strictly after its (last_seen_at, id) key,
+// so no OFFSET scan is needed and the query stays on the index.
+func (r *Repository) ListStale(ctx context.Context, staleAfter time.Duration, after *tripdomain.StaleTrip, limit int) ([]tripdomain.StaleTrip, error) {
+	builder := squirrel.Select("id", "driver_id", lastSeenExpr+" AS last_seen_at").
 		From("trips").
 		Where("status = ?", tripdomain.StatusActive).
-		Where(lastSeenExpr+" < now() - ?::interval", staleAfter).
+		Where(lastSeenExpr+" < now() - ?::interval", staleAfter)
+	if after != nil {
+		builder = builder.Where("("+lastSeenExpr+", id) > (?::timestamptz, ?::uuid)", after.LastSeenAt, after.ID)
+	}
+	query, args, err := builder.
 		OrderBy(lastSeenExpr, "id").
+		Limit(uint64(max(limit, 1))).
 		PlaceholderFormat(squirrel.Dollar).
 		ToSql()
 	if err != nil {
@@ -103,7 +112,7 @@ func (r *Repository) ListStale(ctx context.Context, staleAfter time.Duration) ([
 		return nil, fmt.Errorf("list stale trips (SQL %q): %w", query, err)
 	}
 	defer rows.Close()
-	var trips []tripdomain.StaleTrip
+	trips := make([]tripdomain.StaleTrip, 0, limit)
 	for rows.Next() {
 		var trip tripdomain.StaleTrip
 		if err := rows.Scan(&trip.ID, &trip.DriverID, &trip.LastSeenAt); err != nil {

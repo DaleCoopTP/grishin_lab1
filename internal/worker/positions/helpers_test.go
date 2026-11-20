@@ -3,6 +3,7 @@ package positions_test
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 const (
 	checkInterval = 30 * time.Second
 	staleAfter    = time.Minute
+	batchSize     = 100
 )
 
 func TestMain(m *testing.M) {
@@ -59,8 +61,8 @@ type scanResult struct {
 func scriptedReader(ctrl *gomock.Controller, results ...scanResult) *MockstaleReader {
 	reader := NewMockstaleReader(ctrl)
 	var mu sync.Mutex
-	reader.EXPECT().ListStale(gomock.Any(), staleAfter).DoAndReturn(
-		func(context.Context, time.Duration) ([]trip.StaleTrip, error) {
+	reader.EXPECT().ListStale(gomock.Any(), staleAfter, gomock.Any(), batchSize).DoAndReturn(
+		func(context.Context, time.Duration, *trip.StaleTrip, int) ([]trip.StaleTrip, error) {
 			mu.Lock()
 			defer mu.Unlock()
 			if len(results) == 0 {
@@ -88,6 +90,7 @@ func staleTrips(n int) []trip.StaleTrip {
 type counters struct {
 	mu       sync.Mutex
 	stale    map[string]int
+	scans    []int
 	dropped  int
 	finished map[string]int
 }
@@ -96,6 +99,12 @@ func (c *counters) staleChecks(result string) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.stale[result]
+}
+
+func (c *counters) rowsPerScan() []int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.scans)
 }
 
 func (c *counters) requests(result string) int {
@@ -114,6 +123,11 @@ func recordingMetrics(ctrl *gomock.Controller) (*Mockmetrics, *counters) {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		c.stale[result]++
+	}).AnyTimes()
+	m.EXPECT().ScanFinished(gomock.Any(), gomock.Any()).Do(func(_ context.Context, rows int) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.scans = append(c.scans, rows)
 	}).AnyTimes()
 	m.EXPECT().RequestDropped(gomock.Any()).Do(func(context.Context) {
 		c.mu.Lock()
@@ -188,6 +202,6 @@ func start(t *testing.T, ctx context.Context, cfg positions.Config, reader *Mock
 func config(workers, queueSize int) positions.Config {
 	return positions.Config{
 		CheckInterval: checkInterval, StaleAfter: staleAfter,
-		Workers: workers, QueueSize: queueSize, RequestTimeout: time.Minute,
+		Workers: workers, QueueSize: queueSize, ScanBatchSize: batchSize, RequestTimeout: time.Minute,
 	}
 }

@@ -192,10 +192,7 @@ func TestListStaleSelectsOnlySilentActiveTrips(t *testing.T) {
 	}
 	age(completed, "40 minutes", "40 minutes")
 
-	stale, err := repo.ListStale(ctx, time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
+	stale := listAllStale(t, ctx, repo, time.Minute, 1000)
 	position := map[uuid.UUID]int{}
 	for i, trip := range stale {
 		position[trip.ID] = i
@@ -221,6 +218,67 @@ func TestListStaleSelectsOnlySilentActiveTrips(t *testing.T) {
 	}
 }
 
+// listAllStale walks every batch the way the scanner does.
+func listAllStale(t *testing.T, ctx context.Context, repo *triprepository.Repository, staleAfter time.Duration, limit int) []tripdomain.StaleTrip {
+	t.Helper()
+	var all []tripdomain.StaleTrip
+	var after *tripdomain.StaleTrip
+	for {
+		batch, err := repo.ListStale(ctx, staleAfter, after, limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(batch) > limit {
+			t.Fatalf("batch of %d rows exceeds limit %d", len(batch), limit)
+		}
+		all = append(all, batch...)
+		if len(batch) < limit {
+			return all
+		}
+		after = &batch[len(batch)-1]
+	}
+}
+
+func TestListStaleBatchesWithKeyset(t *testing.T) {
+	usecases, pool := testUsecases(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	repo, _ := positionRepository(pool)
+	ours := map[uuid.UUID]bool{}
+	for i := range 7 {
+		trip := createActiveTrip(t, ctx, usecases, pool)
+		ours[trip.ID] = true
+		// Pairs of trips share last_seen_at, so continuation must also compare ids.
+		if _, err := pool.Exec(ctx, "UPDATE trips SET started_at = now() - interval '2 hours' + make_interval(mins => $2) WHERE id = $1",
+			trip.ID, i/2); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	whole := listAllStale(t, ctx, repo, time.Minute, 10000)
+	paged := listAllStale(t, ctx, repo, time.Minute, 2)
+	if len(paged) != len(whole) {
+		t.Fatalf("batches of 2 returned %d rows, one query returned %d", len(paged), len(whole))
+	}
+	seen := map[uuid.UUID]bool{}
+	found := 0
+	for i, trip := range paged {
+		if seen[trip.ID] {
+			t.Fatalf("trip %s returned twice", trip.ID)
+		}
+		seen[trip.ID] = true
+		if trip.ID != whole[i].ID {
+			t.Fatalf("batches changed the order at row %d", i)
+		}
+		if ours[trip.ID] {
+			found++
+		}
+	}
+	if found != len(ours) {
+		t.Fatalf("batches lost trips: found %d of %d", found, len(ours))
+	}
+}
+
 func TestListStaleUsesIndex(t *testing.T) {
 	_, pool := testUsecases(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -242,16 +300,27 @@ func TestListStaleUsesIndex(t *testing.T) {
 	if _, err := tx.Exec(ctx, "ANALYZE trips"); err != nil {
 		t.Fatal(err)
 	}
-	var plan string
-	err = tx.QueryRow(ctx, `EXPLAIN (COSTS OFF)
-		SELECT id, driver_id, COALESCE(last_position_at, started_at) AS last_seen_at FROM trips
-		WHERE status = 'active' AND COALESCE(last_position_at, started_at) < now() - interval '1 minute'
-		ORDER BY COALESCE(last_position_at, started_at), id`, pgx.QueryExecModeSimpleProtocol).Scan(&plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(plan, "trips_active_last_seen_idx") || strings.Contains(plan, "Seq Scan") {
-		t.Fatalf("stale trips query does not use its index: %s", plan)
+	const selectStale = `SELECT id, driver_id, COALESCE(last_position_at, started_at) AS last_seen_at FROM trips
+		WHERE status = 'active' AND COALESCE(last_position_at, started_at) < now() - interval '1 minute'`
+	for name, query := range map[string]string{
+		"first batch": selectStale + `
+		ORDER BY COALESCE(last_position_at, started_at), id LIMIT 100`,
+		"next batch": selectStale + `
+		AND (COALESCE(last_position_at, started_at), id) > (now() - interval '1 hour', '00000000-0000-0000-0000-000000000000'::uuid)
+		ORDER BY COALESCE(last_position_at, started_at), id LIMIT 100`,
+	} {
+		rows, err := tx.Query(ctx, "EXPLAIN (COSTS OFF) "+query, pgx.QueryExecModeSimpleProtocol)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan := strings.Join(lines, "\n")
+		if !strings.Contains(plan, "trips_active_last_seen_idx") || strings.Contains(plan, "Seq Scan") || strings.Contains(plan, "Sort") {
+			t.Fatalf("%s does not read the index in order:\n%s", name, plan)
+		}
 	}
 }
 
