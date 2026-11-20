@@ -1,10 +1,12 @@
 package positions_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -331,7 +333,9 @@ func TestRealTickerTriggersScan(t *testing.T) {
 func TestStartAndStopAreIdempotent(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	m, _ := recordingMetrics(ctrl)
-	svc := positions.New(config(2, 1), scriptedReader(ctrl), NewMockpusher(ctrl), m, slog.New(slog.DiscardHandler),
+	logs := &syncBuffer{}
+	logger := slog.New(slog.NewJSONHandler(logs, nil))
+	svc := positions.New(config(2, 1), scriptedReader(ctrl), NewMockpusher(ctrl), m, logger,
 		positions.WithTicker(func(time.Duration) positions.Ticker { return newManualTicker() }))
 	if err := svc.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop before Start: %v", err)
@@ -343,4 +347,30 @@ func TestStartAndStopAreIdempotent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	for _, msg := range []string{"stale trip polling started", "stale trip scanner stopped", "position workers stopped"} {
+		if n := strings.Count(logs.String(), `"msg":"`+msg+`"`); n != 1 {
+			t.Fatalf("%q logged %d times, want once:\n%s", msg, n, logs.String())
+		}
+	}
+	if !strings.Contains(logs.String(), `"level":"INFO","msg":"stale trip polling started"`) ||
+		!strings.Contains(logs.String(), `"workers":2`) || !strings.Contains(logs.String(), `"check_interval":"30s"`) {
+		t.Fatalf("start log must be INFO with the pool settings:\n%s", logs.String())
+	}
+}
+
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

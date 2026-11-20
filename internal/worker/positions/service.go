@@ -91,9 +91,17 @@ func (s *Service) Start(ctx context.Context) {
 	}
 	go func() {
 		workers.Wait()
+		s.logger.InfoContext(workCtx, "position workers stopped")
 		close(s.workersDone)
 	}()
 	go s.scan(scanCtx)
+	s.logger.InfoContext(ctx, "stale trip polling started",
+		"check_interval", s.cfg.CheckInterval.String(),
+		"stale_after", s.cfg.StaleAfter.String(),
+		"workers", s.cfg.Workers,
+		"queue_size", s.cfg.QueueSize,
+		"scan_batch_size", s.cfg.ScanBatchSize,
+	)
 }
 
 func (s *Service) Stop(ctx context.Context) error {
@@ -132,6 +140,7 @@ func (s *Service) ActiveWorkers() int {
 
 func (s *Service) scan(ctx context.Context) {
 	defer close(s.scannerDone)
+	defer s.logger.InfoContext(ctx, "stale trip scanner stopped")
 	ticker := s.newTicker(s.cfg.CheckInterval)
 	defer ticker.Stop()
 	for {
