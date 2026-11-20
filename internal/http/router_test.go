@@ -14,7 +14,10 @@ import (
 	"github.com/DaleCoopTP/grishin_lab1/internal/http/response"
 )
 
-const tripsPath = "/api/v1/trips"
+const (
+	tripsPath        = "/api/v1/trips"
+	methodNotAllowed = "method_not_allowed"
+)
 
 func TestRouter(t *testing.T) {
 	id, key := uuid.New(), uuid.New()
@@ -26,10 +29,14 @@ func TestRouter(t *testing.T) {
 		{"create", http.MethodPost, tripsPath, false, key.String()},
 		{"get", http.MethodGet, tripsPath + "/" + id.String(), false, ""},
 		{"finish", http.MethodPost, tripsPath + "/" + id.String() + "/finish", false, ""},
+		{"create position", http.MethodPost, tripsPath + "/" + id.String() + "/positions", false, ""},
+		{"list positions", http.MethodGet, tripsPath + "/" + id.String() + "/positions", false, ""},
 		{"health", http.MethodGet, "/health", false, ""},
 		{"ready", http.MethodGet, "/ready", false, ""},
 		{"invalid get UUID", http.MethodGet, tripsPath + "/bad", true, ""},
 		{"invalid finish UUID", http.MethodPost, tripsPath + "/bad/finish", true, ""},
+		{"invalid position UUID", http.MethodPost, tripsPath + "/bad/positions", true, ""},
+		{"invalid route UUID", http.MethodGet, tripsPath + "/bad/positions", true, ""},
 		{"invalid key", http.MethodPost, tripsPath, true, "bad"},
 	}
 	for _, tc := range cases {
@@ -37,6 +44,7 @@ func TestRouter(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			create := NewMockcreateHandler(ctrl)
 			get, finish := NewMocktripHandler(ctrl), NewMocktripHandler(ctrl)
+			createPosition, listPositions := NewMocktripHandler(ctrl), NewMocktripHandler(ctrl)
 			health, ready := NewMockHandler(ctrl), NewMockHandler(ctrl)
 			switch tc.name {
 			case "create":
@@ -48,6 +56,12 @@ func TestRouter(t *testing.T) {
 			case "finish":
 				finish.EXPECT().Handle(gomock.Any(), gomock.Any(), id).Do(
 					func(w http.ResponseWriter, _ *http.Request, _ api.TripId) { w.WriteHeader(204) })
+			case "create position":
+				createPosition.EXPECT().Handle(gomock.Any(), gomock.Any(), id).Do(
+					func(w http.ResponseWriter, _ *http.Request, _ api.TripId) { w.WriteHeader(204) })
+			case "list positions":
+				listPositions.EXPECT().Handle(gomock.Any(), gomock.Any(), id).Do(
+					func(w http.ResponseWriter, _ *http.Request, _ api.TripId) { w.WriteHeader(204) })
 			case "health":
 				health.EXPECT().ServeHTTP(gomock.Any(), gomock.Any()).Do(
 					func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
@@ -56,7 +70,7 @@ func TestRouter(t *testing.T) {
 					func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
 			}
 			writer := response.New()
-			router := httptransport.NewRouter(create, get, finish, health, ready, writer)
+			router := httptransport.NewRouter(create, get, finish, createPosition, listPositions, health, ready, writer)
 			req := httptest.NewRequest(tc.method, tc.path, nil)
 			if tc.key != "" {
 				req.Header.Set("Idempotency-Key", tc.key)
@@ -82,14 +96,15 @@ func TestRouter(t *testing.T) {
 }
 
 func TestRouterRoutingErrors(t *testing.T) {
-	router := httptransport.NewRouter(nil, nil, nil, nil, nil, response.New())
+	router := httptransport.NewRouter(nil, nil, nil, nil, nil, nil, nil, response.New())
 	for _, tc := range []struct {
 		method, path, code, allow string
 		status                    int
 	}{
 		{http.MethodGet, "/missing", "route_not_found", "", http.StatusNotFound},
-		{http.MethodGet, tripsPath, "method_not_allowed", http.MethodPost, http.StatusMethodNotAllowed},
-		{http.MethodPost, "/health", "method_not_allowed", http.MethodGet, http.StatusMethodNotAllowed},
+		{http.MethodGet, tripsPath, methodNotAllowed, http.MethodPost, http.StatusMethodNotAllowed},
+		{http.MethodPost, "/health", methodNotAllowed, http.MethodGet, http.StatusMethodNotAllowed},
+		{http.MethodDelete, tripsPath + "/" + uuid.NewString() + "/positions", methodNotAllowed, "GET, POST", http.StatusMethodNotAllowed},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			out := httptest.NewRecorder()

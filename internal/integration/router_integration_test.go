@@ -19,6 +19,8 @@ import (
 	"github.com/DaleCoopTP/grishin_lab1/internal/generated"
 	httptransport "github.com/DaleCoopTP/grishin_lab1/internal/http"
 	"github.com/DaleCoopTP/grishin_lab1/internal/http/health"
+	httppositioncreate "github.com/DaleCoopTP/grishin_lab1/internal/http/position/create"
+	httppositionlist "github.com/DaleCoopTP/grishin_lab1/internal/http/position/list"
 	"github.com/DaleCoopTP/grishin_lab1/internal/http/ready"
 	"github.com/DaleCoopTP/grishin_lab1/internal/http/response"
 	httpcreate "github.com/DaleCoopTP/grishin_lab1/internal/http/trip/create"
@@ -26,6 +28,8 @@ import (
 	httpget "github.com/DaleCoopTP/grishin_lab1/internal/http/trip/get"
 	"github.com/DaleCoopTP/grishin_lab1/internal/infra/postgres/transaction"
 	triprepository "github.com/DaleCoopTP/grishin_lab1/internal/repository/trip"
+	positionlist "github.com/DaleCoopTP/grishin_lab1/internal/usecase/position/list"
+	positionsave "github.com/DaleCoopTP/grishin_lab1/internal/usecase/position/save"
 	"github.com/DaleCoopTP/grishin_lab1/internal/usecase/trip/create"
 	"github.com/DaleCoopTP/grishin_lab1/internal/usecase/trip/finish"
 	"github.com/DaleCoopTP/grishin_lab1/internal/usecase/trip/get"
@@ -156,9 +160,13 @@ func testRouter(pool *pgxpool.Pool) http.Handler {
 	createTrip := create.New(repository, tx, nil)
 	getTrip := get.New(repository)
 	finishTrip := finish.New(repository, tx, nil)
+	savePosition := positionsave.New(repository, tx, nil, nil)
+	listPositions := positionlist.New(repository)
 	writer := response.New()
 	return httptransport.NewRouter(httpcreate.New(createTrip, writer), httpget.New(getTrip, writer),
-		httpfinish.New(finishTrip, writer), health.New(writer), ready.New(pool, 3*time.Second, writer), writer)
+		httpfinish.New(finishTrip, writer),
+		httppositioncreate.New(savePosition, writer), httppositionlist.New(listPositions, writer),
+		health.New(writer), ready.New(pool, 3*time.Second, writer), writer)
 }
 
 func testUnavailableDatabase(t *testing.T, ctx context.Context, databaseURL, path string) {

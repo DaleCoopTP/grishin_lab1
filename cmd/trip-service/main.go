@@ -48,6 +48,7 @@ func run(ctx context.Context, cfg config.Config, app *container.Container) error
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- app.Server.Serve(listener) }()
 	app.Logger.Info("HTTP server started", "address", listener.Addr().String())
+	app.StartBackground(ctx)
 
 	select {
 	case err := <-serveErr:
@@ -59,7 +60,8 @@ func run(ctx context.Context, cfg config.Config, app *container.Container) error
 		}
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cfg.ShutdownTimeout)
 		defer cancel()
-		return errors.Join(err, app.Close(cleanupCtx))
+		stopErr := app.StopBackground(cleanupCtx)
+		return errors.Join(err, stopErr, app.Close(cleanupCtx))
 	case <-ctx.Done():
 		return shutdown(ctx, cfg, app, serveErr)
 	}
@@ -84,6 +86,9 @@ func shutdown(ctx context.Context, cfg config.Config, app *container.Container, 
 			_ = app.Server.Close()
 			shutdownErr = fmt.Errorf("wait for HTTP server: %w", shutdownCtx.Err())
 		}
+	}
+	if err := app.StopBackground(shutdownCtx); err != nil {
+		shutdownErr = errors.Join(shutdownErr, err)
 	}
 	if err := errors.Join(shutdownErr, app.Close(shutdownCtx)); err != nil {
 		return err

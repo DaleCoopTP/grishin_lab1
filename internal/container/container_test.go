@@ -90,3 +90,11 @@ func TestNewRejectsInvalidDatabaseConfiguration(t *testing.T) {
 		t.Fatalf("expected initialization failure without an application, got %v, %v", app, err)
 	}
 }
+
+func TestBackgroundWithoutPollerIsNoop(t *testing.T) {
+	app := &Container{closed: make(chan struct{}), closeResources: func(context.Context) {}}
+	app.StartBackground(context.Background())
+	if err := app.StopBackground(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
