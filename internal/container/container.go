@@ -7,7 +7,12 @@ import (
 	"net/http"
 	"sync"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
+	"go.opentelemetry.io/otel/propagation"
+
 	"github.com/DaleCoopTP/grishin_lab1/internal/config"
+	"github.com/DaleCoopTP/grishin_lab1/internal/gateway/push"
 	httptransport "github.com/DaleCoopTP/grishin_lab1/internal/http"
 	"github.com/DaleCoopTP/grishin_lab1/internal/http/health"
 	"github.com/DaleCoopTP/grishin_lab1/internal/http/middleware"
@@ -27,11 +32,13 @@ import (
 	"github.com/DaleCoopTP/grishin_lab1/internal/usecase/trip/create"
 	"github.com/DaleCoopTP/grishin_lab1/internal/usecase/trip/finish"
 	"github.com/DaleCoopTP/grishin_lab1/internal/usecase/trip/get"
+	"github.com/DaleCoopTP/grishin_lab1/internal/worker/positions"
 )
 
 type Container struct {
 	Server         *http.Server
 	Logger         *slog.Logger
+	positions      *positions.Service
 	closeResources func(context.Context)
 	closeOnce      sync.Once
 	closed         chan struct{}
@@ -40,8 +47,11 @@ type Container struct {
 func New(ctx context.Context, cfg config.Config) (_ *Container, err error) {
 	logger := telemetry.NewLogger(cfg.LogLevel)
 	sdk := telemetry.NewSDK(ctx, logger)
-	var closePool func()
+	var closePool, closePush func()
 	closeResources := func(ctx context.Context) {
+		if closePush != nil {
+			closePush()
+		}
 		if err := sdk.Shutdown(ctx); err != nil {
 			logger.WarnContext(ctx, "telemetry shutdown failed", "error.type", fmt.Sprintf("%T", err))
 		}
@@ -76,10 +86,33 @@ func New(ctx context.Context, cfg config.Config) (_ *Container, err error) {
 	if err != nil {
 		return nil, err
 	}
+	pushClient := push.New(cfg.PushHTTPURL, cfg.PushRequestTimeout, push.WithTransport(func(next http.RoundTripper) http.RoundTripper {
+		return otelhttp.NewTransport(next,
+			otelhttp.WithTracerProvider(sdk.Traces),
+			otelhttp.WithMeterProvider(metricnoop.NewMeterProvider()),
+			otelhttp.WithPropagators(propagation.TraceContext{}),
+			otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string { return "push " + r.Method + " " + r.URL.Path }),
+		)
+	}))
+	closePush = pushClient.Close
+	positionRequests, err := telemetry.NewPositionRequests(meter)
+	if err != nil {
+		return nil, err
+	}
+	poller := positions.New(positions.Config{
+		CheckInterval:  cfg.PositionCheckInterval,
+		StaleAfter:     cfg.PositionStaleAfter,
+		Workers:        cfg.PositionWorkers,
+		QueueSize:      cfg.PositionQueueSize,
+		RequestTimeout: cfg.PushRequestTimeout,
+	}, repository, pushClient, positionRequests, logger, positions.WithTracer(sdk.Traces.Tracer("trip-service/positions")))
+	if err := positionRequests.ObservePool(poller); err != nil {
+		return nil, err
+	}
 	createTrip := create.New(repository, txManager, events)
 	getTrip := get.New(repository)
 	finishTrip := finish.New(repository, txManager, events)
-	savePosition := positionsave.New(repository, txManager, nil, positionEvents)
+	savePosition := positionsave.New(repository, txManager, poller, positionEvents)
 	listPositions := positionlist.New(repository)
 	writer := response.New()
 	createHandler := httpcreate.New(createTrip, writer)
@@ -107,11 +140,31 @@ func New(ctx context.Context, cfg config.Config) (_ *Container, err error) {
 	return &Container{
 		Server:         server,
 		Logger:         logger,
+		positions:      poller,
 		closeResources: closeResources,
 		closed:         make(chan struct{}),
 	}, nil
 }
 
+// StartBackground starts polling stale trips. It is detached from ctx
+// cancellation on purpose: a signal must not drop queued requests, the
+// workers are stopped gracefully by StopBackground.
+func (c *Container) StartBackground(ctx context.Context) {
+	if c.positions != nil {
+		c.positions.Start(context.WithoutCancel(ctx))
+	}
+}
+
+// StopBackground stops the scanner, then lets the workers finish the queue
+// within ctx.
+func (c *Container) StopBackground(ctx context.Context) error {
+	if c.positions == nil {
+		return nil
+	}
+	return c.positions.Stop(ctx)
+}
+
+// Close releases the Push Service client, telemetry and the database pool.
 func (c *Container) Close(ctx context.Context) error {
 	c.closeOnce.Do(func() {
 		go func() {

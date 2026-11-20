@@ -43,8 +43,12 @@ func TestQueueDeduplicatesAndCancels(t *testing.T) {
 	if second.tripID != b || !q.claim(second) {
 		t.Fatal("live task must be claimed")
 	}
+	if q.claim(second) {
+		t.Fatal("a task must not be claimed twice")
+	}
+	q.cancel(b)
 	if got := q.offer(task{tripID: b}); got != ResultDuplicate {
-		t.Fatalf("trip being processed must stay pending: %s", got)
+		t.Fatalf("trip being processed must stay pending even after cancel: %s", got)
 	}
 	q.done(second)
 	if got := q.offer(task{tripID: b}); got != ResultQueued {

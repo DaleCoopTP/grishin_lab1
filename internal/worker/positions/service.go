@@ -10,6 +10,16 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
+)
+
+const (
+	scanSpanName    = "positions.scan"
+	requestSpanName = "positions.request"
+	tripIDKey       = "tripgo.trip.id"
 )
 
 type Config struct {
@@ -21,6 +31,11 @@ type Config struct {
 }
 
 type Option func(*Service)
+
+// WithTracer sets the tracer for scan passes and push requests.
+func WithTracer(tracer trace.Tracer) Option {
+	return func(s *Service) { s.tracer = tracer }
+}
 
 // WithTicker replaces the real ticker, used by tests.
 func WithTicker(newTicker func(period time.Duration) Ticker) Option {
@@ -37,6 +52,7 @@ type Service struct {
 	metrics   metrics
 	logger    *slog.Logger
 	newTicker func(time.Duration) Ticker
+	tracer    trace.Tracer
 	queue     *queue
 	active    atomic.Int64
 
@@ -52,6 +68,7 @@ func New(cfg Config, reader staleReader, pusher pusher, metrics metrics, logger 
 	s := &Service{
 		cfg: cfg, reader: reader, pusher: pusher, metrics: metrics, logger: logger,
 		newTicker:   newRealTicker,
+		tracer:      noop.NewTracerProvider().Tracer(""),
 		queue:       newQueue(cfg.QueueSize),
 		scannerDone: make(chan struct{}),
 		workersDone: make(chan struct{}),
@@ -138,30 +155,38 @@ func (s *Service) scan(ctx context.Context) {
 }
 
 func (s *Service) scanOnce(ctx context.Context) {
+	ctx, span := s.tracer.Start(ctx, scanSpanName)
+	defer span.End()
 	trips, err := s.reader.ListStale(ctx, s.cfg.StaleAfter)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "stale trips scan failed")
 		if ctx.Err() == nil {
 			s.logger.ErrorContext(ctx, "stale trips scan failed", "error", err.Error())
 		}
 		return
 	}
-	dropped := 0
+	counts := map[string]int{}
 	for _, trip := range trips {
-		result := s.queue.offer(task{tripID: trip.ID, driverID: trip.DriverID})
+		result := s.queue.offer(task{tripID: trip.ID, driverID: trip.DriverID, scan: span.SpanContext()})
+		counts[result]++
 		s.metrics.StaleCheck(ctx, result)
 		if result == ResultDropped {
-			dropped++
 			s.metrics.RequestDropped(ctx)
 		}
 	}
-	if dropped > 0 {
+	span.SetAttributes(
+		attribute.Int("tripgo.stale_trips", len(trips)),
+		attribute.Int("tripgo.stale_checks.queued", counts[ResultQueued]),
+		attribute.Int("tripgo.stale_checks.duplicate", counts[ResultDuplicate]),
+		attribute.Int("tripgo.stale_checks.dropped", counts[ResultDropped]),
+	)
+	if dropped := counts[ResultDropped]; dropped > 0 {
 		s.logger.WarnContext(ctx, "position request queue is full, trips skipped until the next tick",
 			"dropped", dropped, "queue_size", s.cfg.QueueSize)
 	}
 }
 
-// work leaves the queue untouched once ctx is cancelled, so Stop can report
-// exactly how many tasks were abandoned.
 func (s *Service) work(ctx context.Context) {
 	for ctx.Err() == nil {
 		t, ok := s.queue.take(ctx)
@@ -172,6 +197,8 @@ func (s *Service) work(ctx context.Context) {
 	}
 }
 
+// process runs in its own trace: the request outlives the scan pass that
+// queued it, so the scan span is linked rather than used as the parent.
 func (s *Service) process(ctx context.Context, t task) {
 	if !s.queue.claim(t) {
 		s.logger.DebugContext(ctx, "position request cancelled by a new position", "trip_id", t.tripID)
@@ -181,6 +208,12 @@ func (s *Service) process(ctx context.Context, t task) {
 	s.active.Add(1)
 	defer s.active.Add(-1)
 
+	ctx, span := s.tracer.Start(ctx, requestSpanName,
+		trace.WithNewRoot(),
+		trace.WithLinks(trace.Link{SpanContext: t.scan}),
+		trace.WithAttributes(attribute.String(tripIDKey, t.tripID.String())),
+	)
+	defer span.End()
 	requestCtx, cancel := context.WithTimeout(ctx, s.cfg.RequestTimeout)
 	defer cancel()
 	started := time.Now()
@@ -188,6 +221,8 @@ func (s *Service) process(ctx context.Context, t task) {
 	result := ResultSuccess
 	if err != nil {
 		result = ResultError
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "position request failed")
 		s.logger.WarnContext(ctx, "position request failed", "trip_id", t.tripID, "error", err.Error())
 	}
 	s.metrics.RequestFinished(ctx, result, time.Since(started))

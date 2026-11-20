@@ -4,10 +4,17 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/DaleCoopTP/grishin_lab1/internal/domain/trip"
+)
+
+const (
+	resultKey     = "result"
+	resultDropped = "dropped"
 )
 
 type PositionEvents struct {
@@ -26,4 +33,70 @@ func NewPositionEvents(meter metric.Meter, logger *slog.Logger) (*PositionEvents
 func (e *PositionEvents) Saved(ctx context.Context, position trip.Position) {
 	e.saved.Add(ctx, 1)
 	e.logger.DebugContext(ctx, "position saved", "trip_id", position.TripID, "position_id", position.ID)
+}
+
+type positionPool interface {
+	QueueSize() int
+	ActiveWorkers() int
+}
+
+// PositionRequests records what the stale trip scanner and the worker pool do.
+type PositionRequests struct {
+	meter       metric.Meter
+	staleChecks metric.Int64Counter
+	requests    metric.Int64Counter
+	duration    metric.Float64Histogram
+}
+
+func NewPositionRequests(meter metric.Meter) (*PositionRequests, error) {
+	staleChecks, err := meter.Int64Counter("tripgo.stale_checks", metric.WithUnit("{trip}"))
+	if err != nil {
+		return nil, fmt.Errorf("create stale checks counter: %w", err)
+	}
+	requests, err := meter.Int64Counter("tripgo.position_requests", metric.WithUnit("{request}"))
+	if err != nil {
+		return nil, fmt.Errorf("create position requests counter: %w", err)
+	}
+	duration, err := meter.Float64Histogram("tripgo.position_requests.duration",
+		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create position request duration histogram: %w", err)
+	}
+	return &PositionRequests{meter: meter, staleChecks: staleChecks, requests: requests, duration: duration}, nil
+}
+
+// ObservePool exports the queue length and the number of busy workers.
+func (p *PositionRequests) ObservePool(pool positionPool) error {
+	queueSize, err := p.meter.Int64ObservableGauge("tripgo.position_requests.queue.size", metric.WithUnit("{request}"))
+	if err != nil {
+		return fmt.Errorf("create position queue size gauge: %w", err)
+	}
+	active, err := p.meter.Int64ObservableGauge("tripgo.position_requests.workers.active", metric.WithUnit("{worker}"))
+	if err != nil {
+		return fmt.Errorf("create active position workers gauge: %w", err)
+	}
+	if _, err := p.meter.RegisterCallback(func(_ context.Context, observer metric.Observer) error {
+		observer.ObserveInt64(queueSize, int64(pool.QueueSize()))
+		observer.ObserveInt64(active, int64(pool.ActiveWorkers()))
+		return nil
+	}, queueSize, active); err != nil {
+		return fmt.Errorf("register position pool gauges: %w", err)
+	}
+	return nil
+}
+
+func (p *PositionRequests) StaleCheck(ctx context.Context, result string) {
+	p.staleChecks.Add(ctx, 1, metric.WithAttributes(attribute.String(resultKey, result)))
+}
+
+func (p *PositionRequests) RequestDropped(ctx context.Context) {
+	p.requests.Add(ctx, 1, metric.WithAttributes(attribute.String(resultKey, resultDropped)))
+}
+
+func (p *PositionRequests) RequestFinished(ctx context.Context, result string, duration time.Duration) {
+	attrs := metric.WithAttributes(attribute.String(resultKey, result))
+	p.requests.Add(ctx, 1, attrs)
+	p.duration.Record(ctx, duration.Seconds(), attrs)
 }
