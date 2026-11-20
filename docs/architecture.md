@@ -1,7 +1,8 @@
 # Архитектура Trip Service
 
-Документ описывает реализацию сервиса после ЛР2. Полные требования находятся в
-[условии ЛР2](course/homework/tasks/02-architecture-and-observability/README.md).
+Документ описывает реализацию сервиса после ЛР3. Полные требования находятся в
+[условии ЛР2](course/homework/tasks/02-architecture-and-observability/README.md) и
+[условии ЛР3](course/homework/tasks/03-positions-and-worker-pool/README.md).
 Запуск, конфигурация и команды описаны в [README сервиса](../README.md).
 
 ## Назначение и границы
@@ -11,9 +12,10 @@
 отдельных сущностей пользователей и водителей в БД нет. Стоимость также приходит
 от клиента, в целых рублях.
 
-Реализованы три бизнес-ручки, `/health` и `/ready`, история статусов и
-идемпотентное создание. Координаты движения, фоновые воркеры, Push Service,
-gRPC и Kafka пока не реализованы, хотя их контракты есть в материалах курса.
+Реализованы пять бизнес-ручек (три для поездки, сохранение координаты и маршрут),
+`/health` и `/ready`, история статусов, идемпотентное создание и фоновый опрос
+поездок без свежих координат через Push Service по HTTP. gRPC и Kafka пока не
+реализованы, хотя их контракты есть в материалах курса.
 
 ## Компоненты и зависимости
 
@@ -25,12 +27,17 @@ cmd/trip-service/main.go
   │     ├── postgres.Open → pgxpool
   │     ├── transaction.NewTxManager
   │     ├── triprepository.NewRepository
-  │     ├── create.New / get.New / finish.New
+  │     ├── push.New (otelhttp-транспорт) + positions.New (сканер, очередь, воркеры)
+  │     ├── create.New / get.New / finish.New / positionsave.New / positionlist.New
   │     └── HTTP-хендлеры + response.Writer → роутер → middleware → HTTP-сервер
-  └── запуск сервера, ожидание сигнала, shutdown и container.Close
+  └── запуск сервера и опроса, ожидание сигнала, остановка по шагам и container.Close
 
-HTTP → сгенерированный роутер → http/trip/{create,get,finish} → usecase/trip/{create,get,finish}
+HTTP → сгенерированный роутер → http/trip/{create,get,finish}, http/position/{create,list}
+  → usecase/trip/{create,get,finish}, usecase/position/{save,list}
   → repository/trip.Repository → transaction.Manager.Executor → PostgreSQL
+
+worker/positions: тикер → Repository.ListStale (батчи) → приоритетная очередь
+  → POSITION_WORKERS воркеров → gateway/push.Client → Push Service
 ```
 
 | Компонент | Ответственность |
@@ -48,14 +55,20 @@ HTTP → сгенерированный роутер → http/trip/{create,get,f
 | [create.Usecase](../internal/usecase/trip/create/usecase.go) | Создание поездки и идемпотентность в одной транзакции |
 | [get.Usecase](../internal/usecase/trip/get/usecase.go) | Получение поездки |
 | [finish.Usecase](../internal/usecase/trip/finish/usecase.go) | Завершение и запись истории в одной транзакции |
-| [domain/trip](../internal/domain/trip/trip.go) | Поездка, координаты и доменный конструктор |
+| [http/position/create](../internal/http/position/create/handler.go), [list](../internal/http/position/list/handler.go) | Разбор координаты и выдача маршрута |
+| [http/request](../internal/http/request/decode.go) | Строгий разбор JSON-тела с обязательными полями, общий для хендлеров создания |
+| [positionsave.Usecase](../internal/usecase/position/save/usecase.go) | Сохранение координаты и `last_position_at` в одной транзакции, снятие поездки с опроса после коммита |
+| [positionlist.Usecase](../internal/usecase/position/list/usecase.go) | Маршрут поездки, `404` для неизвестной поездки |
+| [worker/positions](../internal/worker/positions/service.go) | Сканер по тикеру, приоритетная очередь с дедупликацией, пул воркеров, остановка |
+| [gateway/push](../internal/gateway/push/client.go) | HTTP-клиент Push Service с таймаутами и различением ошибок транспорта и статуса |
+| [domain/trip](../internal/domain/trip/trip.go) | Поездка, координаты, точка маршрута ([position.go](../internal/domain/trip/position.go)) и доменные конструкторы |
 | [model](../internal/model/trip.go) | Входные данные создания; рядом лежит модель записи идемпотентности |
 | [domain/trip/errors](../internal/domain/trip/errors.go) | Ошибки предметной области |
 | [repository/trip.Repository](../internal/repository/trip/repo.go) | SQL через squirrel и обработка ошибок PostgreSQL |
 | [repository/trip/convert](../internal/repository/trip/convert.go) | Преобразование строки PostgreSQL в доменную поездку |
 | [transaction.Manager](../internal/infra/postgres/transaction/transaction.go) | Транзакции и выбор исполнителя SQL |
 | [postgres.Open](../internal/infra/postgres/pool.go) | Пул подключений и стартовый Ping |
-| [infra/telemetry](../internal/infra/telemetry/sdk.go) | JSON slog, провайдеры OpenTelemetry и экспорт OTLP |
+| [infra/telemetry](../internal/infra/telemetry/sdk.go) | JSON slog, провайдеры OpenTelemetry, экспорт OTLP, бизнес-метрики поездок и опроса ([positions.go](../internal/infra/telemetry/positions.go)) |
 
 Каждый usecase объявляет неэкспортируемые интерфейсы зависимостей в своём
 `contract.go`. Создание использует операции записи и идемпотентности;
@@ -84,7 +97,7 @@ SQL-методы оставлены вместе в `repo.go`: при текущ
 
 Источник контракта — [корневой OpenAPI](../contracts/openapi/trip-service.openapi.yaml).
 [Конфигурация генерации](../api/oapi-codegen.yaml) выбирает операции `createTrip`,
-`getTrip`, `finishTrip`, `health`, `ready`. Команда `make generate` создаёт
+`getTrip`, `finishTrip`, `createTripPosition`, `listTripPositions`, `health`, `ready`. Команда `make generate` создаёт
 [api.gen.go](../internal/generated/api.gen.go); вручную этот файл не редактируют.
 
 HTTP проверяет тип и размер тела, форму JSON, типы и наличие полей. Домен
@@ -103,11 +116,17 @@ HTTP проверяет тип и размер тела, форму JSON, тип
 
 ## Хранение и гарантии
 
-[Миграции](../migrations/) создают три таблицы:
+[Миграции](../migrations/) создают четыре таблицы:
 
-- `trips` — текущее состояние поездки;
+- `trips` — текущее состояние поездки, с ЛР3 — и время последней координаты
+  `last_position_at`;
 - `trip_status_history` — история переходов статуса;
-- `trip_idempotency_keys` — хеш запроса, снимок результата и срок действия ключа.
+- `trip_idempotency_keys` — хеш запроса, снимок результата и срок действия ключа;
+- `trip_positions` — точки маршрута с индексом `(trip_id, recorded_at, id)`.
+
+Миграция `00005` отдельно создаёт `CONCURRENTLY` частичный индекс
+`trips_active_last_seen_idx` по `(COALESCE(last_position_at, started_at), id)`
+для активных поездок — под выборку опроса.
 
 Создание поездки и запись истории выполняются атомарно. Завершение и запись его
 истории также находятся в одной транзакции. Ошибка записи истории откатывает
@@ -120,6 +139,41 @@ HTTP проверяет тип и размер тела, форму JSON, тип
 Завершение загружает поездку через `SELECT … FOR UPDATE`, вызывает
 `Trip.Finish` и сохраняет состояние и историю в той же транзакции. Второй
 конкурентный вызов ждёт блокировку и затем получает уже завершённую поездку.
+
+Сохранение координаты берёт ту же блокировку строки, проверяет, что поездка
+активна, вставляет точку и обновляет `last_position_at = GREATEST(last_position_at, $1)`.
+Сравнение в самом запросе защищает от координат, пришедших не по порядку, а
+блокировка — от гонки с завершением. Ошибка любого шага откатывает и точку, и
+`last_position_at`.
+
+## Опрос устаревших поездок
+
+`positions.Service` — один компонент из сканера, очереди и воркеров; подробное
+описание, параметры и метрики — в [README](../README.md#опрос-устаревших-поездок).
+
+- **Сканер** — одна горутина с тикером за интерфейсом `Ticker`. На тике он читает
+  `Repository.ListStale` батчами с продолжением по ключу `(last_seen_at, id)` и
+  ставит поездки в очередь неблокирующим `offer`. Обход синхронный, поэтому тики
+  не накладываются. Тик заканчивается на батче, где очередь переполнилась.
+- **Очередь** — куча по `last_seen_at` ёмкостью `POSITION_QUEUE_SIZE` и множество
+  «сейчас в очереди» под одним мьютексом. Множество держит поездку от постановки
+  до конца обработки, поэтому одна поездка не стоит в очереди дважды и не
+  обрабатывается двумя воркерами сразу. `Cancel` из сохранения координаты
+  удаляет ждущую поездку; уже отправленный запрос не трогает. При заполненной
+  очереди более давняя поездка вытесняет самую свежую.
+- **Воркеры** — `POSITION_WORKERS` горутин на всё время жизни. Каждая задача —
+  отдельный корневой спан `positions.request` со span link на спан обхода
+  `positions.scan`, контекст с таймаутом `PUSH_REQUEST_TIMEOUT` и одна попытка.
+  Паника клиента перехватывается и считается ошибкой.
+- **Гейтвей** реализует интерфейс `pusher`, объявленный в пакете воркера.
+  Транспорт обёрнут `otelhttp`, поэтому вызов Push Service — отдельный
+  клиентский спан, а `traceparent` уходит в заголовке.
+
+`Container.StartBackground` запускает опрос с контекстом, отвязанным от отмены
+сигналом: сигнал не должен бросать очередь. `Container.StopBackground`
+останавливает сканер, закрывает очередь и ждёт, пока воркеры её разберут; если
+контекст остановки истёк, отменяет текущие запросы и сообщает, сколько задач
+осталось.
 
 ## Транзакции
 
@@ -149,9 +203,10 @@ HTTP проверяет тип и размер тела, форму JSON, тип
 
 Конфигурация читается из env; `make run` загружает `.env.example`, затем `.env`.
 Сам бинарник env-файлы не читает. При недоступной БД стартовый Ping завершает
-запуск с ошибкой. Миграции запускаются отдельно. По SIGINT/SIGTERM сервис
-дожидается запросов и вызывает `Container.Close` в пределах общего
-`SHUTDOWN_TIMEOUT`. Пул закрывается также при ошибке запуска HTTP и при ошибке
+запуск с ошибкой. Миграции запускаются отдельно. По SIGINT/SIGTERM сервис в
+пределах общего `SHUTDOWN_TIMEOUT` по шагам: дожидается HTTP-запросов,
+останавливает сканер, даёт воркерам разобрать очередь и вызывает
+`Container.Close`, который закрывает клиент Push Service, телеметрию и пул. Пул закрывается также при ошибке запуска HTTP и при ошибке
 graceful shutdown. Повторные или конкурентные вызовы `Close` не запускают
 закрытие ресурсов повторно. Если контекст закрытия истёк, ожидание завершается
 с ошибкой, а уже начатое закрытие ресурсов продолжает выполняться.
@@ -170,6 +225,10 @@ Unit-тесты HTTP-хендлеров и readiness используют `httpt
 Моки генерируются `go tool mockgen` через `go:generate` в `mocks_test.go` рядом
 с контрактами; `make generate` запускает OpenAPI-генерацию и `go generate`.
 Unit-тесты usecase подменяют репозиторий и менеджер транзакций через `gomock`.
+Тесты `worker/positions` управляют тикером вручную и синхронизируются каналами,
+без `time.Sleep`; в пакетах воркера и гейтвея подключён `goleak.VerifyTestMain`.
+Интеграционные тесты координат проверяют `last_position_at`, откат через
+временный триггер, выборку опроса, батчи и план запроса.
 
 HTTP проходит через `Recover → Tracing → Logging → Metrics → роутер`.
 Контейнер передаёт провайдеры OTel в middleware и трассировщик пула. HTTP-логи,
