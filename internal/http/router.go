@@ -14,19 +14,25 @@ import (
 )
 
 type serverHandlers struct {
-	create createHandler
-	get    tripHandler
-	finish tripHandler
-	health http.Handler
-	ready  http.Handler
+	create         createHandler
+	get            tripHandler
+	finish         tripHandler
+	createPosition tripHandler
+	listPositions  tripHandler
+	health         http.Handler
+	ready          http.Handler
 }
 
 var _ api.ServerInterface = (*serverHandlers)(nil)
 
-func NewRouter(create createHandler, get, finish tripHandler,
+func NewRouter(create createHandler, get, finish, createPosition, listPositions tripHandler,
 	health, ready http.Handler, response *response.Writer,
 ) chi.Router {
-	handlers := &serverHandlers{create: create, get: get, finish: finish, health: health, ready: ready}
+	handlers := &serverHandlers{
+		create: create, get: get, finish: finish,
+		createPosition: createPosition, listPositions: listPositions,
+		health: health, ready: ready,
+	}
 	router := chi.NewRouter()
 	api.HandlerWithOptions(handlers, api.ChiServerOptions{
 		BaseRouter: router,
@@ -76,6 +82,14 @@ func (h *serverHandlers) GetTrip(w http.ResponseWriter, r *http.Request, id api.
 
 func (h *serverHandlers) FinishTrip(w http.ResponseWriter, r *http.Request, id api.TripId) {
 	h.finish.Handle(w, r, id)
+}
+
+func (h *serverHandlers) CreateTripPosition(w http.ResponseWriter, r *http.Request, id api.TripId) {
+	h.createPosition.Handle(w, r, id)
+}
+
+func (h *serverHandlers) ListTripPositions(w http.ResponseWriter, r *http.Request, id api.TripId) {
+	h.listPositions.Handle(w, r, id)
 }
 
 func (h *serverHandlers) Health(w http.ResponseWriter, r *http.Request) {

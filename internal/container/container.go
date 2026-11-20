@@ -11,6 +11,8 @@ import (
 	httptransport "github.com/DaleCoopTP/grishin_lab1/internal/http"
 	"github.com/DaleCoopTP/grishin_lab1/internal/http/health"
 	"github.com/DaleCoopTP/grishin_lab1/internal/http/middleware"
+	httppositioncreate "github.com/DaleCoopTP/grishin_lab1/internal/http/position/create"
+	httppositionlist "github.com/DaleCoopTP/grishin_lab1/internal/http/position/list"
 	"github.com/DaleCoopTP/grishin_lab1/internal/http/ready"
 	"github.com/DaleCoopTP/grishin_lab1/internal/http/response"
 	httpcreate "github.com/DaleCoopTP/grishin_lab1/internal/http/trip/create"
@@ -20,6 +22,8 @@ import (
 	"github.com/DaleCoopTP/grishin_lab1/internal/infra/postgres/transaction"
 	"github.com/DaleCoopTP/grishin_lab1/internal/infra/telemetry"
 	triprepository "github.com/DaleCoopTP/grishin_lab1/internal/repository/trip"
+	positionlist "github.com/DaleCoopTP/grishin_lab1/internal/usecase/position/list"
+	positionsave "github.com/DaleCoopTP/grishin_lab1/internal/usecase/position/save"
 	"github.com/DaleCoopTP/grishin_lab1/internal/usecase/trip/create"
 	"github.com/DaleCoopTP/grishin_lab1/internal/usecase/trip/finish"
 	"github.com/DaleCoopTP/grishin_lab1/internal/usecase/trip/get"
@@ -68,16 +72,25 @@ func New(ctx context.Context, cfg config.Config) (_ *Container, err error) {
 	if err != nil {
 		return nil, err
 	}
+	positionEvents, err := telemetry.NewPositionEvents(meter, logger)
+	if err != nil {
+		return nil, err
+	}
 	createTrip := create.New(repository, txManager, events)
 	getTrip := get.New(repository)
 	finishTrip := finish.New(repository, txManager, events)
+	savePosition := positionsave.New(repository, txManager, nil, positionEvents)
+	listPositions := positionlist.New(repository)
 	writer := response.New()
 	createHandler := httpcreate.New(createTrip, writer)
 	getHandler := httpget.New(getTrip, writer)
 	finishHandler := httpfinish.New(finishTrip, writer)
+	createPositionHandler := httppositioncreate.New(savePosition, writer)
+	listPositionsHandler := httppositionlist.New(listPositions, writer)
 	healthHandler := health.New(writer)
 	readyHandler := ready.New(pool, cfg.DatabaseQueryTimeout, writer)
-	router := httptransport.NewRouter(createHandler, getHandler, finishHandler, healthHandler, readyHandler, writer)
+	router := httptransport.NewRouter(createHandler, getHandler, finishHandler,
+		createPositionHandler, listPositionsHandler, healthHandler, readyHandler, writer)
 	handler, err := middleware.Wrap(router, writer, logger, sdk.Traces, meter)
 	if err != nil {
 		return nil, err
