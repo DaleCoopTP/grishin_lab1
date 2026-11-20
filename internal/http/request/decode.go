@@ -12,8 +12,6 @@ import (
 
 const maxBodyBytes = 1 << 20
 
-// DecodeJSON strictly decodes a single JSON object into dst and returns its raw
-// top-level fields so callers can check nested required fields.
 func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any, required ...string) (map[string]json.RawMessage, error) {
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
@@ -39,7 +37,6 @@ func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any, required ...str
 	return fields, nil
 }
 
-// RequireFields checks that a nested JSON object contains non-null fields.
 func RequireFields(fields map[string]json.RawMessage, object string, names ...string) error {
 	if _, err := requiredFields(fields[object], names...); err != nil {
 		return fmt.Errorf("%s: %w", object, err)

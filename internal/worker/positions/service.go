@@ -35,19 +35,14 @@ type Config struct {
 
 type Option func(*Service)
 
-// WithTracer sets the tracer for scan passes and push requests.
 func WithTracer(tracer trace.Tracer) Option {
 	return func(s *Service) { s.tracer = tracer }
 }
 
-// WithTicker replaces the real ticker, used by tests.
 func WithTicker(newTicker func(period time.Duration) Ticker) Option {
 	return func(s *Service) { s.newTicker = newTicker }
 }
 
-// Service polls trips without fresh positions: one scanner goroutine puts them
-// into a bounded queue and a fixed pool of workers asks Push Service for a
-// position.
 type Service struct {
 	cfg       Config
 	reader    staleReader
@@ -82,8 +77,6 @@ func New(cfg Config, reader staleReader, pusher pusher, metrics metrics, logger 
 	return s
 }
 
-// Start launches the scanner and the workers. Cancelling ctx stops them at
-// once, dropping queued tasks; Stop is the graceful way.
 func (s *Service) Start(ctx context.Context) {
 	if !s.started.CompareAndSwap(false, true) {
 		return
@@ -103,9 +96,6 @@ func (s *Service) Start(ctx context.Context) {
 	go s.scan(scanCtx)
 }
 
-// Stop stops the scanner first so no new tasks appear, then lets the workers
-// finish the queue. If ctx expires first, in-flight requests are cancelled and
-// the rest of the queue is abandoned.
 func (s *Service) Stop(ctx context.Context) error {
 	if !s.started.Load() {
 		return nil
@@ -128,7 +118,6 @@ func (s *Service) Stop(ctx context.Context) error {
 	}
 }
 
-// Cancel removes a trip from the queue because its position has arrived.
 func (s *Service) Cancel(tripID uuid.UUID) {
 	s.queue.cancel(tripID)
 }
@@ -141,8 +130,6 @@ func (s *Service) ActiveWorkers() int {
 	return int(s.active.Load())
 }
 
-// scan runs passes one after another in a single goroutine, so ticks never
-// overlap: a tick that arrives during a pass is dropped by time.Ticker.
 func (s *Service) scan(ctx context.Context) {
 	defer close(s.scannerDone)
 	ticker := s.newTicker(s.cfg.CheckInterval)
@@ -157,9 +144,6 @@ func (s *Service) scan(ctx context.Context) {
 	}
 }
 
-// scanOnce reads stale trips in batches, the longest silent first. It stops
-// after the batch in which the queue overflowed: later rows are fresher and
-// would be dropped anyway, so the next tick starts from the beginning.
 func (s *Service) scanOnce(ctx context.Context) {
 	ctx, span := s.tracer.Start(ctx, scanSpanName)
 	defer span.End()
@@ -216,8 +200,6 @@ func (s *Service) scanOnce(ctx context.Context) {
 	}
 }
 
-// work leaves the queue untouched once ctx is cancelled, so Stop can report
-// exactly how many tasks were abandoned.
 func (s *Service) work(ctx context.Context) {
 	for ctx.Err() == nil {
 		t, ok := s.queue.take(ctx)
@@ -228,8 +210,6 @@ func (s *Service) work(ctx context.Context) {
 	}
 }
 
-// process runs in its own trace: the request outlives the scan pass that
-// queued it, so the scan span is linked rather than used as the parent.
 func (s *Service) process(ctx context.Context, t task) {
 	if !s.queue.claim(t) {
 		s.logger.DebugContext(ctx, "position request cancelled by a new position", "trip_id", t.tripID)
@@ -259,7 +239,6 @@ func (s *Service) process(ctx context.Context, t task) {
 	s.metrics.RequestFinished(ctx, result, time.Since(started))
 }
 
-// request keeps a panicking pusher from killing the worker.
 func (s *Service) request(ctx context.Context, t task) (err error) {
 	defer func() {
 		if r := recover(); r != nil {

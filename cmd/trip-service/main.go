@@ -72,7 +72,6 @@ func shutdown(ctx context.Context, cfg config.Config, app *container.Container, 
 	defer cancel()
 	app.Logger.Info("graceful shutdown started")
 
-	// 1. HTTP: stop accepting connections and wait for in-flight requests.
 	var shutdownErr error
 	if err := app.Server.Shutdown(shutdownCtx); err != nil {
 		_ = app.Server.Close()
@@ -88,12 +87,9 @@ func shutdown(ctx context.Context, cfg config.Config, app *container.Container, 
 			shutdownErr = fmt.Errorf("wait for HTTP server: %w", shutdownCtx.Err())
 		}
 	}
-	// 2-3. Stop the scanner so no new tasks appear, then let the workers
-	// finish the queue within what is left of SHUTDOWN_TIMEOUT.
 	if err := app.StopBackground(shutdownCtx); err != nil {
 		shutdownErr = errors.Join(shutdownErr, err)
 	}
-	// 4. Close the Push Service client, telemetry and the database pool.
 	if err := errors.Join(shutdownErr, app.Close(shutdownCtx)); err != nil {
 		return err
 	}

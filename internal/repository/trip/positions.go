@@ -85,10 +85,6 @@ func (r *Repository) ListPositions(ctx context.Context, tripID uuid.UUID) ([]tri
 	return positions, nil
 }
 
-// ListStale returns up to limit active trips silent for longer than staleAfter,
-// the longest silent first. Pass the last trip of the previous batch as after
-// to continue: the next batch starts strictly after its (last_seen_at, id) key,
-// so no OFFSET scan is needed and the query stays on the index.
 func (r *Repository) ListStale(ctx context.Context, staleAfter time.Duration, after *tripdomain.StaleTrip, limit int) ([]tripdomain.StaleTrip, error) {
 	builder := squirrel.Select("id", "driver_id", lastSeenExpr+" AS last_seen_at").
 		From("trips").

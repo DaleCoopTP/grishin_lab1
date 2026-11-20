@@ -22,10 +22,6 @@ func compareKey(a, b trip.StaleTrip) int {
 	return bytes.Compare(a.ID[:], b.ID[:])
 }
 
-// keysetReader serves sorted tables the way the repository does: rows strictly
-// after the (last_seen_at, id) key of the previous batch, at most limit rows.
-// Every pass (a call without a cursor) moves to the next table; after the last
-// one passes see nothing.
 type keysetReader struct {
 	mu     sync.Mutex
 	passes [][]trip.StaleTrip
@@ -70,8 +66,6 @@ func (k *keysetReader) recordedCalls() []*trip.StaleTrip {
 	return slices.Clone(k.calls)
 }
 
-// tripsWithTies returns n stale trips where every five share last_seen_at, so
-// the continuation must also compare ids.
 func tripsWithTies(n int) []trip.StaleTrip {
 	base := time.Now().Add(-time.Hour).Truncate(time.Microsecond)
 	trips := make([]trip.StaleTrip, n)
@@ -157,7 +151,6 @@ func TestScanStopsAfterOverflowBatchAndRestarts(t *testing.T) {
 	g.open()
 }
 
-// Three trips arrive mixed up; the worker takes them from the longest silent.
 func TestWorkerTakesLongestSilentTripFirst(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	busy := staleTrips(1)[0]
@@ -188,8 +181,6 @@ func TestWorkerTakesLongestSilentTripFirst(t *testing.T) {
 	}
 }
 
-// When the queue is full, an older trip evicts the freshest one instead of
-// being dropped itself; a fresher trip is dropped.
 func TestFullQueueEvictsFreshestTrip(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	busy := staleTrips(1)[0]

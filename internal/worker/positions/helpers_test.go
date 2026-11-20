@@ -26,9 +26,6 @@ func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m)
 }
 
-// manualTicker delivers ticks only when the test asks. The channel is
-// unbuffered, so tick returns once the scanner is back in its select loop,
-// which means the previous pass has finished.
 type manualTicker struct {
 	ch      chan time.Time
 	stopped chan struct{}
@@ -57,7 +54,6 @@ type scanResult struct {
 	err   error
 }
 
-// scriptedReader returns the given results one per pass, then empty passes.
 func scriptedReader(ctrl *gomock.Controller, results ...scanResult) *MockstaleReader {
 	reader := NewMockstaleReader(ctrl)
 	var mu sync.Mutex
@@ -145,7 +141,6 @@ func recordingMetrics(ctrl *gomock.Controller) (*Mockmetrics, *counters) {
 	return m, c
 }
 
-// gate blocks push requests until released and reports when each one starts.
 type gate struct {
 	started chan uuid.UUID
 	release chan struct{}

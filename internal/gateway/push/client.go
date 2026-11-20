@@ -30,7 +30,6 @@ func (e *StatusError) Error() string {
 
 type Option func(*Client)
 
-// WithTransport replaces the HTTP transport, for example to add tracing.
 func WithTransport(wrap func(http.RoundTripper) http.RoundTripper) Option {
 	return func(c *Client) {
 		c.client.Transport = wrap(c.client.Transport)
@@ -70,8 +69,6 @@ type pushRequest struct {
 	Data        map[string]string `json:"data"`
 }
 
-// RequestPosition asks the driver's device to send its current position.
-// A transport failure is returned wrapped; a non-202 response is a *StatusError.
 func (c *Client) RequestPosition(ctx context.Context, driverID, tripID uuid.UUID) error {
 	body, err := json.Marshal(pushRequest{
 		RequestID:   uuid.NewString(),
@@ -101,7 +98,6 @@ func (c *Client) RequestPosition(ctx context.Context, driverID, tripID uuid.UUID
 	return nil
 }
 
-// Close releases idle connections; in-flight requests are not interrupted.
 func (c *Client) Close() {
 	c.transport.CloseIdleConnections()
 }

@@ -218,7 +218,6 @@ func TestListStaleSelectsOnlySilentActiveTrips(t *testing.T) {
 	}
 }
 
-// listAllStale walks every batch the way the scanner does.
 func listAllStale(t *testing.T, ctx context.Context, repo *triprepository.Repository, staleAfter time.Duration, limit int) []tripdomain.StaleTrip {
 	t.Helper()
 	var all []tripdomain.StaleTrip
@@ -248,7 +247,6 @@ func TestListStaleBatchesWithKeyset(t *testing.T) {
 	for i := range 7 {
 		trip := createActiveTrip(t, ctx, usecases, pool)
 		ours[trip.ID] = true
-		// Pairs of trips share last_seen_at, so continuation must also compare ids.
 		if _, err := pool.Exec(ctx, "UPDATE trips SET started_at = now() - interval '2 hours' + make_interval(mins => $2) WHERE id = $1",
 			trip.ID, i/2); err != nil {
 			t.Fatal(err)

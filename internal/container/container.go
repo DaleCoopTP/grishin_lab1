@@ -147,17 +147,12 @@ func New(ctx context.Context, cfg config.Config) (_ *Container, err error) {
 	}, nil
 }
 
-// StartBackground starts polling stale trips. It is detached from ctx
-// cancellation on purpose: a signal must not drop queued requests, the
-// workers are stopped gracefully by StopBackground.
 func (c *Container) StartBackground(ctx context.Context) {
 	if c.positions != nil {
 		c.positions.Start(context.WithoutCancel(ctx))
 	}
 }
 
-// StopBackground stops the scanner, then lets the workers finish the queue
-// within ctx.
 func (c *Container) StopBackground(ctx context.Context) error {
 	if c.positions == nil {
 		return nil
@@ -165,7 +160,6 @@ func (c *Container) StopBackground(ctx context.Context) error {
 	return c.positions.Stop(ctx)
 }
 
-// Close releases the Push Service client, telemetry and the database pool.
 func (c *Container) Close(ctx context.Context) error {
 	c.closeOnce.Do(func() {
 		go func() {

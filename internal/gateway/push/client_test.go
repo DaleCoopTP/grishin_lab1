@@ -79,8 +79,6 @@ func TestRequestPositionReturnsStatusError(t *testing.T) {
 	}
 }
 
-// drainBody reads the body so the server starts watching the connection
-// and cancels the request context once the client goes away.
 func drainBody(r *http.Request) {
 	_, _ = io.Copy(io.Discard, r.Body)
 }

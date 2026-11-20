@@ -40,7 +40,6 @@ type positionPool interface {
 	ActiveWorkers() int
 }
 
-// PositionRequests records what the stale trip scanner and the worker pool do.
 type PositionRequests struct {
 	meter       metric.Meter
 	staleChecks metric.Int64Counter
@@ -68,7 +67,7 @@ func NewPositionRequests(meter metric.Meter) (*PositionRequests, error) {
 	}
 	duration, err := meter.Float64Histogram("tripgo.position_requests.duration",
 		metric.WithUnit("s"),
-		metric.WithExplicitBucketBoundaries(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+		metric.WithExplicitBucketBoundaries(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 0.75, 1, 1.1, 1.25, 1.5, 2, 2.5, 5, 10),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create position request duration histogram: %w", err)
@@ -76,7 +75,6 @@ func NewPositionRequests(meter metric.Meter) (*PositionRequests, error) {
 	return &PositionRequests{meter: meter, staleChecks: staleChecks, scanRows: scanRows, requests: requests, duration: duration}, nil
 }
 
-// ObservePool exports the queue length and the number of busy workers.
 func (p *PositionRequests) ObservePool(pool positionPool) error {
 	queueSize, err := p.meter.Int64ObservableGauge("tripgo.position_requests.queue.size", metric.WithUnit("{request}"))
 	if err != nil {

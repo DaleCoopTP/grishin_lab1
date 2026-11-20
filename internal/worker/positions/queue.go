@@ -26,14 +26,6 @@ type task struct {
 	seq        uint64
 }
 
-// queue is a bounded priority queue: the trip that has been silent the longest
-// is taken first, and when the queue is full an older trip evicts the freshest
-// one instead of being dropped.
-//
-// pending is the set of trips "in the queue now". A trip stays there from
-// offer until a worker finishes it. A new position removes a trip that is still
-// waiting; a trip whose push is already in flight stays until the worker is
-// done, so one trip is never queued twice or processed twice at once.
 type queue struct {
 	mu        sync.Mutex
 	waiting   taskHeap
@@ -50,8 +42,6 @@ type entry struct {
 	processing bool
 }
 
-// offerResult tells the scanner what happened to the trip and whether another
-// trip was evicted to make room for it.
 type offerResult struct {
 	result  string
 	evicted bool
@@ -65,8 +55,6 @@ func newQueue(capacity int) *queue {
 	}
 }
 
-// offer never blocks. The duplicate check and the insertion happen under one
-// lock, so two offers of the same trip cannot both pass the check.
 func (q *queue) offer(t task) offerResult {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -95,9 +83,6 @@ func (q *queue) offer(t task) offerResult {
 	return offerResult{result: ResultQueued, evicted: evicted}
 }
 
-// signal wakes one waiting worker. The channel holds at least as many tokens
-// as there are waiting tasks; a token may be stale after a cancel or an
-// eviction, and take then simply waits again.
 func (q *queue) signal() {
 	select {
 	case q.available <- struct{}{}:
@@ -105,8 +90,6 @@ func (q *queue) signal() {
 	}
 }
 
-// take returns the longest silent trip and marks it as being processed; false
-// means the queue is closed and drained or ctx is done.
 func (q *queue) take(ctx context.Context) (task, bool) {
 	for {
 		q.mu.Lock()
@@ -129,7 +112,6 @@ func (q *queue) take(ctx context.Context) (task, bool) {
 	}
 }
 
-// claim reports whether the taken task is still the trip's current entry.
 func (q *queue) claim(t task) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -145,7 +127,6 @@ func (q *queue) done(t task) {
 	}
 }
 
-// cancel removes a waiting trip; a push already in flight cannot be undone.
 func (q *queue) cancel(tripID uuid.UUID) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -163,7 +144,6 @@ func (q *queue) len() int {
 	return len(q.waiting)
 }
 
-// close lets workers drain what is left; offers after close are dropped.
 func (q *queue) close() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -173,7 +153,6 @@ func (q *queue) close() {
 	}
 }
 
-// taskHeap is a min-heap by last_seen_at; ties keep the queueing order.
 type taskHeap []*entry
 
 func (h taskHeap) Len() int { return len(h) }
@@ -207,8 +186,6 @@ func (h *taskHeap) Pop() any {
 	return e
 }
 
-// freshest finds the most recently seen trip. It is a linear scan over a
-// queue of POSITION_QUEUE_SIZE entries and runs only when the queue is full.
 func (h taskHeap) freshest() int {
 	best := -1
 	for i := range h {

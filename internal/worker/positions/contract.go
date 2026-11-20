@@ -26,7 +26,6 @@ type metrics interface {
 	RequestFinished(ctx context.Context, result string, duration time.Duration)
 }
 
-// Ticker hides time.Ticker so tests can drive the scanner tick by tick.
 type Ticker interface {
 	C() <-chan time.Time
 	Stop()

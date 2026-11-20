@@ -17,8 +17,6 @@ import (
 	"github.com/DaleCoopTP/grishin_lab1/internal/worker/positions"
 )
 
-// Scenario 2: a trip that is already queued or being processed is not queued
-// again by the next tick.
 func TestTickDoesNotQueueTripTwice(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	trips := staleTrips(2)
@@ -49,8 +47,6 @@ func TestTickDoesNotQueueTripTwice(t *testing.T) {
 	}
 }
 
-// Scenario 3: a position that arrives between queueing and processing cancels
-// the push; a later tick may queue the trip again.
 func TestPositionCancelsQueuedRequest(t *testing.T) {
 	t.Run("cancelled", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
@@ -103,7 +99,6 @@ func TestPositionCancelsQueuedRequest(t *testing.T) {
 	})
 }
 
-// Scenario 4: a full queue drops tasks and the scanner keeps ticking.
 func TestQueueOverflowDropsInsteadOfBlocking(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	busy := staleTrips(1)[0]
@@ -135,7 +130,6 @@ func TestQueueOverflowDropsInsteadOfBlocking(t *testing.T) {
 	g.open()
 }
 
-// Scenario 5: N tasks are processed by exactly POSITION_WORKERS workers.
 func TestPoolProcessesTasksWithFixedWorkers(t *testing.T) {
 	const workers, tasks = 3, 10
 	ctrl := gomock.NewController(t)
@@ -188,7 +182,6 @@ func TestPoolProcessesTasksWithFixedWorkers(t *testing.T) {
 	}
 }
 
-// Scenario 6: cancelling the context stops the scanner and every worker.
 func TestContextCancelStopsScannerAndWorkers(t *testing.T) {
 	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
 	ctrl := gomock.NewController(t)
@@ -214,7 +207,6 @@ func TestContextCancelStopsScannerAndWorkers(t *testing.T) {
 	}
 }
 
-// Scenario 7: a Push Service failure does not stop the worker.
 func TestPushFailureDoesNotStopWorker(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	trips := staleTrips(3)
